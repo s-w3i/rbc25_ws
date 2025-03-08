@@ -1,0 +1,18 @@
+<package format="3">
+  <name>voice_recognition</name>
+  <version>0.0.0</version>
+  <description>ROS 2 node for voice recognition using OpenAI Whisper</description>
+  
+  <maintainer email="YOUR_EMAIL@domain.com">YOUR_NAME</maintainer>
+  <license>Apache License 2.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+  <depend>rclpy</depend>
+
+  <!-- Python dependencies for logic only (already installed via pip), 
+       but you can declare them here if you want to use rosdep for management. -->
+  
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
