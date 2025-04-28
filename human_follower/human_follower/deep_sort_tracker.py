@@ -1,21 +1,16 @@
 #!/usr/bin/env python3
 import os
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["OPENBLAS_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
-os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
-os.environ["NUMEXPR_NUM_THREADS"] = "1"
-
 import rclpy
 from rclpy.node import Node
 
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
-
+import torch
 import cv2
 from deep_sort_realtime.deepsort_tracker import DeepSort
 from ultralytics import YOLO
 import numpy as np
+from rclpy.qos import QoSPresetProfiles
 
 # Import tf2 related libraries and PoseStamped for goal publishing
 from geometry_msgs.msg import TransformStamped, PoseStamped
@@ -29,22 +24,20 @@ class RealsenseTrackerNode(Node):
 
         # Initialize YOLOv8n model (lightweight)
         self.model = YOLO("yolov8n.pt")  # or "yolov8n.onnx"
-
+        self.use_gpu = torch.cuda.is_available()
+        device_str = 'cuda:0' if self.use_gpu else 'cpu'
+        self.get_logger().info(f"CUDA available: {self.use_gpu}, using device {device_str}")
         # Initialize Deep SORT tracker
         self.tracker = DeepSort(
             max_age=10000,              # Adjust for crowded or fast-moving scenes
             n_init=3,
             nms_max_overlap=1.0,
-            max_cosine_distance=0.4,
-            nn_budget=5000,
-            override_track_class=None,
-            embedder="torchreid", 
-            embedder_model_name="osnet_x1_0",   # Lightweight embedder
-            half=True,               # Use FP16 if your GPU supports it
-            bgr=True,
-            embedder_gpu=True,
+            max_iou_distance=0.7,
+            embedder="mobilenet",    # lightweight embedder
+            embedder_gpu=self.use_gpu
         )
-
+        qos = QoSPresetProfiles.SENSOR_DATA.value
+        
         # Initialize tf2 broadcaster, buffer, and listener
         self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
         self.tf_buffer = tf2_ros.Buffer()
@@ -56,17 +49,17 @@ class RealsenseTrackerNode(Node):
         # Subscribe to RealSense color image topic
         self.image_subscriber = self.create_subscription(
             Image,
-            "/camera/camera/color/image_raw",  # Adjust if your topic name differs
+            "/camera0/color/image_raw",  # Adjust if your topic name differs
             self.image_callback,
-            10
+            qos
         )
 
         # Subscribe to RealSense depth image topic
         self.depth_subscriber = self.create_subscription(
             Image,
-            "/camera/camera/depth/image_rect_raw",  # Adjust this topic name if needed
+            "/camera0/depth/image_rect_raw",  # Adjust this topic name if needed
             self.depth_callback,
-            10
+            qos
         )
 
         self.latest_depth = None  # Store the latest depth image

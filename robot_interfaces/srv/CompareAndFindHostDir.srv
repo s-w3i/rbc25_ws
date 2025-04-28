@@ -1,0 +1,8 @@
+# Request
+string host_image_path
+string unknown_images_dir
+---
+# Response
+bool   success
+string message              # GPT’s explanation or error
+string best_match_image     # filesystem path of the matching image

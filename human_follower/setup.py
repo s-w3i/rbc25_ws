@@ -1,4 +1,5 @@
 from setuptools import setup
+import glob
 
 package_name = 'human_follower'
 
@@ -10,6 +11,8 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        ('share/' + package_name + '/launch',
+            glob.glob('launch/*.py')),  
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -22,6 +25,9 @@ setup(
         'console_scripts': [
             'yolo_detector = human_follower.yolo_detector:main',
             'deep_sort_tracker = human_follower.deep_sort_tracker:main',
+            'nvblox_human_detection = human_follower.nvblox_detection:main',
+            'goal_publisher = human_follower.goal_publisher:main',
+            'task_state = human_follower.task_state:main',
         ],
     },
 )

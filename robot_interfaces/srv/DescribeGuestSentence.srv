@@ -1,0 +1,5 @@
+string guest_info_json
+---
+bool success
+string description
+string message

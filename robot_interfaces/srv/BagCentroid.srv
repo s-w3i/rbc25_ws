@@ -1,0 +1,5 @@
+# Request — none
+---
+geometry_msgs/Point centroid   # metres, camera frame
+bool success
+string message

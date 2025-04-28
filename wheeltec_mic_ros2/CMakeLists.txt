@@ -10,7 +10,7 @@ include_directories(
 )
 
 link_directories(
-  lib/x64
+  lib/arm64
 )
 #ament_index_register_resource("ros1_bridge_foreign_mapping")
 install(DIRECTORY launch config feedback_voice
@@ -23,6 +23,7 @@ find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(serial REQUIRED)
 find_package(wheeltec_mic_msg REQUIRED)
+find_package(std_srvs REQUIRED) 
  
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
@@ -88,7 +89,7 @@ voice_control
 )
 
 add_executable(voice_record src/voice_record.cpp)
-ament_target_dependencies(voice_record rclcpp std_msgs wheeltec_mic_msg)
+ament_target_dependencies(voice_record rclcpp std_msgs std_srvs wheeltec_mic_msg)
 target_link_libraries(voice_record ${catkin_LIBRARIES} offline_record_lib rt dl pthread stdc++ asound)
 install(TARGETS voice_record
   RUNTIME DESTINATION lib/${PROJECT_NAME}   

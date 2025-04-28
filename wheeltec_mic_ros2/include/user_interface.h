@@ -18,7 +18,7 @@ char *SYSTEM_PATH = (char*)"/tmp/system.tar";
 char *SYSTEM_CONFIG_PATH = (char*)"/tmp/config.txt";
 
 /******与离线命令词识别相关参数******/
-std::string source_path = "/home/robot11/wheeltec_mic/wheeltec_mic_ros2";
+std::string source_path = "/home/usern/rbc25_ws/wheeltec_mic_ros2";
 std::string appid ;
 char *package_path;
 char *denoise_sound_path;

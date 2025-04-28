@@ -1,0 +1,21 @@
+# vector_bridge.yaml
+name: vector_bridge            # node name
+from_domain: 11                 # domain ID where the topic is originally published
+to_domain: 12                   # domain ID where you want to republish it
+
+topics:
+  # Bridge "/clock" topic from doman ID 2 to domain ID 3
+  clock:
+    type: rosgraph_msgs/msg/Clock
+  arm_target:            # replace with your actual topic name
+    type: geometry_msgs/msg/Vector3
+    subscribe_qos:
+      history: KEEP_LAST
+      depth:   10
+      reliability: RELIABLE
+      durability: VOLATILE
+    publish_qos:
+      history: KEEP_LAST
+      depth:   10
+      reliability: RELIABLE
+      durability: VOLATILE

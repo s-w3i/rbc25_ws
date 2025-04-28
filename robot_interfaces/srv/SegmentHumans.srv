@@ -1,0 +1,7 @@
+# Request (empty)
+---
+# Response
+bool success
+string message
+sensor_msgs/Image[] segmented_images
+geometry_msgs/Point[] centroids

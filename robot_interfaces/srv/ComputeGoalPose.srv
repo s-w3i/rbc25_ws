@@ -1,0 +1,6 @@
+# ComputeGoalPose.srv
+string target_frame
+---
+geometry_msgs/PoseStamped goal_pose
+bool success
+string message

@@ -1,0 +1,7 @@
+# Request
+string image_path
+---
+# Response
+bool success
+string description
+string message

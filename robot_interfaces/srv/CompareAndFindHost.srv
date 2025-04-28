@@ -1,0 +1,8 @@
+# Request
+string               host_image_dir
+sensor_msgs/Image[]  segmented_images
+geometry_msgs/Point[] centroids
+---
+# Response
+bool   success
+string best_person    # "person_1", "person_2", ...
