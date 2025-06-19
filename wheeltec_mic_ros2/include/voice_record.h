@@ -2,49 +2,52 @@
 #define VOICE_RECORD_H
 
 #include <rclcpp/rclcpp.hpp>
-#include <std_msgs/msg/int8.hpp>
+#include <std_srvs/srv/trigger.hpp>
 #include <alsa/asoundlib.h>
 #include <atomic>
-#include <vector>
 #include <chrono>
-#include <ctime>
 #include <cmath>
-#include <thread>
 #include <cstdio>
+#include <filesystem>
+#include <string>
+#include <thread>
 
+// ALSA device name
 #define RECORD_DEVICE_NAME "default"
-#define buffer_frames 512
 
+// User-defined recording parameters (channels, ALSA format code)
 typedef struct {
-    int channel;
-    int format;
+    int channel;  // e.g. 1 => mono, 2 => stereo
+    int format;   // e.g. 2 => SND_PCM_FORMAT_S16_LE
 } record_params_t;
 
+// ALSA PCM handle & metadata
 typedef struct {
-    snd_pcm_t *pcm;
+    snd_pcm_t* pcm;
     snd_pcm_format_t format;
     unsigned int rate;
     size_t chunk_size;
     size_t bits_per_sample;
     size_t bits_per_frame;
     size_t chunk_bytes;
-    unsigned char *buffer;
+    unsigned char* buffer;
 } record_handle_t;
 
+// Minimal WAV header struct for 16-bit PCM
 typedef struct {
-    char riff[4];
-    uint32_t file_size;
-    char wave[4];
-    char fmt[4];
-    uint32_t fmt_size;
-    uint16_t format;
+    char riff[4];           // "RIFF"
+    uint32_t file_size;     // file size minus 8
+    char wave[4];           // "WAVE"
+    char fmt[4];            // "fmt "
+    uint32_t fmt_size;      // 16 for PCM
+    uint16_t format;        // 1 => PCM
     uint16_t channels;
     uint32_t sample_rate;
     uint32_t byte_rate;
     uint16_t block_align;
     uint16_t bits_per_sample;
-    char data[4];
-    uint32_t data_size;
+    char data[4];           // "data"
+    uint32_t data_size;     // size of audio data
 } WavHeader;
 
 class SpeechProcess : public rclcpp::Node {
@@ -53,33 +56,40 @@ public:
     ~SpeechProcess();
 
 private:
-    // ALSA members
-    record_handle_t record;
+    // We do NOT open ALSA in the constructor, so we only have a default 'params'.
     record_params_t params;
-    int init_success;
 
-    // Recording control
-    std::atomic<bool> active_mode{false};
+    // Flag controlling if a recording is in progress
     std::atomic<bool> is_recording{false};
-    std::atomic<int> silent_count{0};
+    // Incremented each time a valid file is saved
     std::atomic<int> file_counter{0};
-    
-    // Configuration
-    static constexpr float SILENCE_THRESHOLD = 0.1f;
-    static constexpr int MAX_SILENT_FILES = 10;
-    static constexpr int SILENCE_TIMEOUT = 3;
-    static constexpr int MAX_RECORD_SECONDS = 10;
 
-    // ROS members
-    rclcpp::Subscription<std_msgs::msg::Int8>::SharedPtr awake_sub_;
+    // ROS service for triggering a single recording session
+    rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr record_service_;
 
-    // Core functions
-    void start_recording();
-    void write_wav_header(FILE* file, uint32_t data_size);
-    int record_params_init(record_handle_t* pcm_handle, record_params_t* params);
-    static snd_pcm_format_t get_formattype_from_params(record_params_t* params);
-    int finish_record_sound();
+    // Configuration constants
+    static constexpr float SILENCE_THRESHOLD  = 0.03f; // RMS threshold for silence
+    static constexpr float SILENCE_TIMEOUT    = 2.0f;  // Stop 2s after speech ends
+    static constexpr int   MAX_RECORD_SECONDS = 10;    // Hard stop at 10s
+
+    // Internal functions
+    int record_params_init(record_handle_t* pcm_handle, const record_params_t* params);
+    static snd_pcm_format_t get_formattype_from_params(const record_params_t* params);
+    void close_pcm(record_handle_t& pcm_handle);
+
     bool check_silence(const unsigned char* buffer, size_t samples);
+
+    // **Important**: Updated to accept the local record & params
+    void write_wav_header(FILE* file,
+                          uint32_t data_size,
+                          const record_handle_t& rec,
+                          const record_params_t& params);
+
+    // Service callback that captures one WAV file
+    void recordAudioCallback(
+        const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+        std::shared_ptr<std_srvs::srv::Trigger::Response> response
+    );
 };
 
-#endif
+#endif // VOICE_RECORD_H
