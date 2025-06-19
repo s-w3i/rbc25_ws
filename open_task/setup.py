@@ -35,6 +35,7 @@ setup(
         'console_scripts': [
             'assistant_node = open_task.assistant_node:main',
             'classifier_node = open_task.voice_classifier:main',
+            'last_task = open_task.last_task:main',
         ],
     },
 )

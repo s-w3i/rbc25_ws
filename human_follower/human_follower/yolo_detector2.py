@@ -11,9 +11,10 @@ from builtin_interfaces.msg import Time as TimeMsg    # zero-stamp for TF lookup
 from cv_bridge import CvBridge
 import numpy as np
 import cv2
+import torch
 from ultralytics import YOLO
 from deep_sort_realtime.deepsort_tracker import DeepSort
-import torch
+
 import tf2_ros
 import tf2_geometry_msgs                                # registers PoseStamped with TF2
 
@@ -21,6 +22,7 @@ import tf2_geometry_msgs                                # registers PoseStamped 
 class LiveHumanDetectionWithID(Node):
     """YOLOv8-seg + DeepSORT + adaptive Re-ID for ROS 2."""
 
+    # ──────────── init ────────────
     def __init__(self):
         super().__init__("live_human_detection_with_service")
         self.bridge = CvBridge()
@@ -49,21 +51,34 @@ class LiveHumanDetectionWithID(Node):
         self.create_subscription(CameraInfo, "/camera0/color/camera_info",    self.info_cb,   qos)
 
         # detector  – segmentation model (gives person masks)
-        self.model = YOLO("yolov8n-seg.pt")                 
+        self.model = YOLO("yolov8n-seg.pt")                 # download once
         self.get_logger().info("Loaded YOLOv8-seg model.")
 
         # DeepSORT
         self.tracker = DeepSort(
-            max_age=50,
-            n_init=10,
-            max_iou_distance=0.3,
-            nms_max_overlap=0.8,
-            nn_budget=100,
-            half=True,
-            max_cosine_distance=0.8,
-            embedder="mobilenet",
+            max_age=1000,              # frames to keep "lost" track alive
+            n_init=5,                 # hits to confirm a track
+            max_iou_distance=0.35,
+            nms_max_overlap=0.3,
+            embedder="mobilenet",      # keep CPU-light; can swap to torchreid later
             embedder_gpu=torch.cuda.is_available()
         )
+
+        metric_obj = self.tracker.tracker.metric
+        orig_distance = metric_obj.distance
+        def safe_distance(features, targets):
+            import numpy as np
+            # cost_matrix: shape (len(targets), len(features))
+            cost_matrix = np.zeros((len(targets), len(features)))
+            for i, tid in enumerate(targets):
+                if tid in metric_obj.samples:
+                    # compute only for this one target → get row 0
+                    cost_matrix[i, :] = orig_distance(features, [tid])[0]
+                else:
+                    # unseen track → give a high cost (so it won’t match)
+                    cost_matrix[i, :] = metric_obj.matching_threshold
+            return cost_matrix
+        metric_obj.distance = safe_distance
 
         # buffers
         self.latest_color = None
@@ -71,14 +86,15 @@ class LiveHumanDetectionWithID(Node):
         self.fx = self.fy = self.cx = self.cy = None
 
         # Re-ID memory
-        self.gallery     = {}   # published_id → feature vector
-        self.last_seen   = {}   # published_id → rclpy.time.Time
-        self.id_map      = {}   # internal_tracker_id → published_id
-        self.base_thresh = 0.65
+        self.gallery     = {}          # id → feature vector
+        self.last_seen   = {}          # id → rclpy.time.Time
+        self.base_thresh = 0.70        # adaptive lower bound
+        self.min_reid_similarity = 0.70        # never match below this cosine sim
+        self.reid_margin         = 0.04        # require at least this gap to 2nd best
+        self.max_display_gap = 5  
 
         # run at 10 Hz
         self.create_timer(0.1, self.process_frame)
-
 
     # ──────────── callbacks ────────────
     def toggle_detection_cb(self, req, res):
@@ -97,7 +113,7 @@ class LiveHumanDetectionWithID(Node):
     def depth_cb(self, msg: Image):
         try:
             depth = self.bridge.imgmsg_to_cv2(msg, "passthrough")
-            if depth.dtype == np.uint16:
+            if depth.dtype == np.uint16:          # mm → m
                 depth = depth.astype(np.float32) / 1000.0
             self.latest_depth = depth
         except Exception as e:
@@ -107,7 +123,6 @@ class LiveHumanDetectionWithID(Node):
         K = msg.k
         self.fx, self.fy = K[0], K[4]
         self.cx, self.cy = K[2], K[5]
-
 
     # ──────────── main loop ────────────
     def process_frame(self):
@@ -120,12 +135,10 @@ class LiveHumanDetectionWithID(Node):
 
         # 1 · Detect persons + masks
         results = self.model(frame, conf=0.5, classes=[0], verbose=False)[0]
-        boxes_xy  = (results.boxes.xyxy.cpu().numpy().astype(int)
-                     if results.boxes is not None else [])
-        confs     = (results.boxes.conf.cpu().numpy()
-                     if results.boxes is not None else [])
-        masks_all = (results.masks.data.cpu().numpy()
-                     if results.masks is not None else None)
+        # person class id = 0
+        boxes_xy  = results.boxes.xyxy.cpu().numpy().astype(int) if results.boxes is not None else []
+        confs     = results.boxes.conf.cpu().numpy() if results.boxes is not None else []
+        masks_all = results.masks.data.cpu().numpy() if results.masks is not None else None
 
         # 2 · Build DeepSORT dets + masks
         dets, instance_masks = [], []
@@ -133,106 +146,113 @@ class LiveHumanDetectionWithID(Node):
             dets.append([[x1, y1, x2 - x1, y2 - y1], float(c), 0])
             instance_masks.append((masks_all[i] > 0.5) if masks_all is not None else None)
 
-        # 3 · Snapshot your gallery
+        # 3 · Preserve current gallery
         old_gallery = self.gallery.copy()
 
-        # 4 · Run DeepSORT
-        tracks = self.tracker.update_tracks(dets,
-                                            frame=frame,
-                                            instance_masks=instance_masks)
+        # 4 · Update tracks (Option 4 – pass masks)
+        tracks = self.tracker.update_tracks(dets, frame=frame, instance_masks=instance_masks)
 
-        # 5 · Refresh feature memory under published_ids
+        # 5 · Refresh embeddings for confirmed tracks
         for tr in tracks:
             if not tr.is_confirmed():
                 continue
-            feat = tr.get_feature()
-            if feat is None:
-                continue
-            feat = feat / np.linalg.norm(feat)
-            internal_id = tr.track_id
-            pub_id = self.id_map.get(internal_id, internal_id)
-            self.gallery[pub_id] = feat
+            tid, feat = tr.track_id, tr.get_feature()
+            if feat is not None:
+                self.gallery[tid] = feat / np.linalg.norm(feat)
 
-        # 6 · Adaptive Re-ID mapping (no in-place ID overwrite!)
+        # 6 · Re-associate new IDs  (Option 3 – adaptive threshold)
         for tr in tracks:
             if not tr.is_confirmed():
                 continue
-            internal_id = tr.track_id
-
-            # skip if already mapped
-            if internal_id in self.id_map:
-                continue
+            tid = tr.track_id
+            if tid in old_gallery:
+                continue                          # already known
 
             new_feat = tr.get_feature()
             if new_feat is None:
                 continue
-            new_feat = new_feat / np.linalg.norm(new_feat)
+            new_feat /= np.linalg.norm(new_feat)
 
-            # find best-match in old_gallery
-            best_id, best_sim = None, -1.0
-            for pid, pfeat in old_gallery.items():
-                sim = float(np.dot(new_feat, pfeat))
-                if sim > best_sim:
-                    best_sim, best_id = sim, pid
+            sims = [(gid, float(np.dot(new_feat, gfeat))) for gid, gfeat in old_gallery.items()]
+            sims.sort(key=lambda x: x[1], reverse=True)
+            if not sims:
+                continue
+            best_id, best_sim = sims[0]
+            second_sim = sims[1][1] if len(sims) > 1 else 0.0
 
-            # compute time-gap threshold
-            last = self.last_seen.get(best_id, self.get_clock().now())
-            gap_s = (self.get_clock().now() - last).nanoseconds * 1e-9
-            thr   = np.interp(gap_s,
-                              [0, 10, 30],
-                              [0.75, self.base_thresh, self.base_thresh - 0.1])
 
-            if best_id is not None and best_sim > thr:
+            # adaptive threshold depends on how long best_id has been gone
+            if best_id is not None and best_id in self.last_seen:
+                gap_s = (self.get_clock().now() - self.last_seen[best_id]).nanoseconds * 1e-9
+            else:
+                gap_s = 0.0
+            thr = np.interp(gap_s,
+                [0,    3,     10],     # key timepoints in seconds
+                [0.85, 0.75,  self.base_thresh])
+
+            # combine adaptive + floor threshold, and enforce a margin to the runner-up
+            effective_thr = max(thr, self.min_reid_similarity)
+            if best_sim > effective_thr and (best_sim - second_sim) > self.reid_margin:
                 self.get_logger().info(
-                    f"Re-ID: {internal_id} → {best_id} (sim={best_sim:.2f}, thr={thr:.2f})"
+                   f"Re-ID: {tid} → {best_id} (sim={best_sim:.2f}, thr={effective_thr:.2f}, gap={best_sim-second_sim:.2f})"
                 )
-                self.id_map[internal_id] = best_id
-                self.gallery[best_id] = new_feat
-            # otherwise, this stays as a new track under its own internal_id
+                # reassign the track ID
+                tr.track_id           = best_id
 
-        # 7 · Publish poses / TFs / draw
+                # overwrite the old best_id entry
+                self.gallery[best_id] = new_feat
+                # prune the stale gallery entry for the original tid
+                if tid in self.gallery and tid != best_id:
+                    del self.gallery[tid]
+
+                # likewise prune its last_seen timestamp
+                if tid in self.last_seen:
+                    del self.last_seen[tid]
+        # 7 · Publish / draw **only** if the track was just updated
         now_msg = self.get_clock().now().to_msg()
         for tr in tracks:
+            # skip unconfirmed tracks
             if not tr.is_confirmed():
                 continue
 
-            internal_id  = tr.track_id
-            published_id = self.id_map.get(internal_id, internal_id)
-            self.last_seen[published_id] = self.get_clock().now()
+            # skip “ghost” tracks that haven’t seen a detection in a few frames
+            if tr.time_since_update > self.max_display_gap:
+                continue
+            tid      = tr.track_id
+            self.last_seen[tid] = self.get_clock().now()          # update seen time
 
             l, t, r, b = map(int, tr.to_ltrb())
-            cx, cy = (l + r) // 2, (t + b) // 2
+            cx, cy     = (l + r) // 2, (t + b) // 2
             cv2.rectangle(frame, (l, t), (r, b), (0, 255, 0), 2)
             cv2.circle(frame, (cx, cy), 5, (0, 0, 255), -1)
 
-            # depth → XYZ in camera
-            if 0 <= cx < self.latest_depth.shape[1] and \
-               0 <= cy < self.latest_depth.shape[0]:
+            if 0 <= cx < self.latest_depth.shape[1] and 0 <= cy < self.latest_depth.shape[0]:
                 z = float(self.latest_depth[cy, cx])
                 if z > 0.0 and np.isfinite(z):
                     X = (cx - self.cx) * z / self.fx
                     Y = (cy - self.cy) * z / self.fy
 
+                    # camera-frame pose
                     pose_raw = PoseStamped()
-                    pose_raw.header.stamp    = now_msg
-                    pose_raw.header.frame_id = self.sensor_frame
-                    pose_raw.pose.position.x = X
-                    pose_raw.pose.position.y = Y
-                    pose_raw.pose.position.z = z
+                    pose_raw.header.stamp     = now_msg
+                    pose_raw.header.frame_id  = self.sensor_frame
+                    pose_raw.pose.position.x  = X
+                    pose_raw.pose.position.y  = Y
+                    pose_raw.pose.position.z  = z
                     pose_raw.pose.orientation.w = 1.0
                     self.pose_pub_raw.publish(pose_raw)
 
                     # transform to base frame
-                    pose_tf = pose_raw
-                    pose_tf.header.stamp = TimeMsg()  # zero → use latest
+                    pose_tf           = pose_raw
+                    pose_tf.header.stamp = TimeMsg()              # zero for latest
                     try:
                         pout = self.tf_buffer.transform(pose_tf, self.base_frame)
-                        pout.pose.position.z = 0.0
+                        pout.pose.position.z = 0.0               # flatten
 
-                        tf_msg = TransformStamped()
-                        tf_msg.header.stamp    = now_msg
-                        tf_msg.header.frame_id = self.base_frame
-                        tf_msg.child_frame_id  = f"people_{published_id}"
+                        tf_msg                       = TransformStamped()
+                        tf_msg.header.stamp          = now_msg
+                        tf_msg.header.frame_id       = self.base_frame
+                        tf_msg.child_frame_id        = f"people_{tid}"
                         tf_msg.transform.translation.x = pout.pose.position.x
                         tf_msg.transform.translation.y = pout.pose.position.y
                         tf_msg.transform.translation.z = pout.pose.position.z
@@ -242,16 +262,14 @@ class LiveHumanDetectionWithID(Node):
                     except tf2_ros.TransformException as ex:
                         self.get_logger().warn(f"TF failure: {ex}")
 
-                    cv2.putText(frame,
-                                f"ID {published_id}: {z:.2f} m",
-                                (l, t - 8),
-                                cv2.FONT_HERSHEY_DUPLEX,
-                                0.6, (255, 255, 255), 2)
+                    cv2.putText(frame, f"ID {tid}: {z:.2f} m", (l, t - 8),
+                                cv2.FONT_HERSHEY_DUPLEX, 0.6, (255, 255, 255), 2)
 
         cv2.imshow("Live Re-ID", frame)
         cv2.waitKey(1)
 
 
+# ──────────── main ────────────
 def main():
     rclpy.init()
     node = LiveHumanDetectionWithID()

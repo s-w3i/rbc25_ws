@@ -22,7 +22,7 @@ setup(
         'console_scripts': [
             'detect_chair = yolo_detection.chair_detection:main',
             'detect_human = yolo_detection.human_detection:main',
-            'find_bag = yolo_detection.bag_identification:main',
+            'find_bag = yolo_detection.choose_bag:main',
         ],
     },
 )

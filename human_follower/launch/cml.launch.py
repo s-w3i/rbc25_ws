@@ -29,6 +29,16 @@ def generate_launch_description():
             )
         )
     )
+    
+    arm_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory('arm_control'),
+                'launch',
+                'domain_bridge.launch.py'
+            )
+        )
+    )
 
     # ------------------------------------------------------------------
     # 2.  Core nodes that must be up *before* we launch task_state
@@ -73,7 +83,8 @@ def generate_launch_description():
     # 4.  Assemble LaunchDescription
     # ------------------------------------------------------------------
     return LaunchDescription([
-        mic_launch,
+        #mic_launch,
+        arm_launch,
         voice_recognition,
         human_reid,
         human_following,

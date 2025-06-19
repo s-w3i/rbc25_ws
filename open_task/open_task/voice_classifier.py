@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 import os
 import base64
@@ -37,7 +36,7 @@ class ClassifierNode(Node):
 
         # LangChain LLM and memory
         self.llm = ChatOpenAI(
-            model_name="gpt-4o-mini",
+            model_name="gpt-4o",
             openai_api_key=api_key,
             max_tokens=150
         )
@@ -49,6 +48,7 @@ class ClassifierNode(Node):
             input_variables=["history", "input"],
             template=(
                 "You are a concise home assistant. Answer in one or two sentences with no extra commentary.\n"
+                "According to the weather forecast, today is a cloudy day, do consider this information when the user asks for outfit suggestions.\n"
                 "Conversation so far:\n{history}\n"
                 "User: {input}\n"
                 "Assistant:"
@@ -181,12 +181,14 @@ class ClassifierNode(Node):
             {'type': 'image_url', 'image_url': {'url': data_url}}
         ]}
         resp = self.client.chat.completions.create(
-            model='gpt-4o-mini',
+            model='gpt-4o',
             messages=[system_msg, user_msg]
         )
         return resp.choices[0].message.content.strip()
 
     def handle_dalle_request(self, text: str) -> str:
+        # Inform user that image generation is starting
+        self._speak("Please wait while I generate the image for you.")
         low = text.lower()
         subject = text.strip()
         for phrase in ('draw me a', 'draw a', 'sketch a', 'generate image of', 'create picture of', 'picture of'):
@@ -210,10 +212,13 @@ class ClassifierNode(Node):
                 reply = "Failed to decode generated image."
             else:
                 reply = f"Here is the generated image for {subject}."
-                cv2.imshow("Generated Image", img)
+                window_name = "Generated Image"
+                cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+                cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+                cv2.imshow(window_name, img)
                 self._speak(reply)
-                cv2.waitKey(10000)
-                cv2.destroyWindow("Generated Image")
+                cv2.waitKey(15000)
+                cv2.destroyWindow(window_name)
             self.memory.save_context({"input": text}, {"output": reply})
             return reply
         except Exception as e:

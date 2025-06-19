@@ -1,7 +1,7 @@
 # vector_bridge.yaml
 name: vector_bridge            # node name
-from_domain: 11                 # domain ID where the topic is originally published
-to_domain: 12                   # domain ID where you want to republish it
+from_domain: 221                 # domain ID where the topic is originally published
+to_domain: 222                   # domain ID where you want to republish it
 
 topics:
   # Bridge "/clock" topic from doman ID 2 to domain ID 3

@@ -21,8 +21,8 @@ def generate_launch_description():
             output='screen',
             # override domains here if you like:
             arguments=[
-                '--from', '11',           # original DDS domain
-                '--to',   '12',           # target DDS domain
+                '--from', '221',           # original DDS domain
+                '--to',   '222',           # target DDS domain
                 config_file             # path to your YAML
             ],
         ),

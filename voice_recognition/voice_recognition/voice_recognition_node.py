@@ -1,11 +1,13 @@
+#!/usr/bin/env python3
+
 import os
 import time
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
 import whisper  # Import the local Whisper transcription library
-from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
+from watchdog.observers.polling import PollingObserver as Observer
 
 class AudioFileHandler(FileSystemEventHandler):
     def __init__(self, node, ready_delay=0.5):
@@ -26,32 +28,33 @@ class AudioFileHandler(FileSystemEventHandler):
             time.sleep(self.ready_delay)
             self.node.transcribe_if_final(event.src_path)
 
+
 class WhisperNode(Node):
     def __init__(self, directory, model_name="base"):
         super().__init__('whisper_node')
         self.directory = directory
         self.last_processed_file = None
-        
+
         # Publisher to broadcast transcripts
         self.transcript_pub = self.create_publisher(String, 'speech_recognition_transcript', 10)
-        
+
         # Load the local Whisper model
         self.get_logger().info(f"Loading Whisper model: {model_name}")
         self.model = whisper.load_model(model_name)
         self.get_logger().info("Model loaded successfully.")
 
-        # Start watchdog observer to monitor file system events
+        # Start polling observer to monitor file system events (avoids inotify limits)
         self.observer = Observer()
         event_handler = AudioFileHandler(self, ready_delay=1.0)
         self.observer.schedule(event_handler, self.directory, recursive=False)
         self.observer.start()
-        self.get_logger().info(f"Monitoring directory with watchdog: {self.directory}")
+        self.get_logger().info(f"Monitoring directory with PollingObserver: {self.directory}")
 
     def transcribe_if_final(self, file_path):
         # Avoid duplicate processing
         if file_path == self.last_processed_file:
             return
-        
+
         # Check if file size is stable over a short period
         try:
             initial_size = os.path.getsize(file_path)
@@ -61,7 +64,7 @@ class WhisperNode(Node):
         except Exception as e:
             self.get_logger().error(f"Error checking file size: {e}")
             return
-        
+
         transcript_text = self.transcribe_audio(file_path)
         self.get_logger().info(f"Transcript: {transcript_text}")
 
@@ -89,15 +92,16 @@ class WhisperNode(Node):
         self.observer.join()
         super().destroy_node()
 
+
 def main(args=None):
     rclpy.init(args=args)
-    
+
     # Replace with the directory where your WAV files are saved
     directory_to_watch = "/home/usern/rbc25_ws/audio"
-    
+
     # Optionally change the model name if needed ("base", "small", "medium", etc.)
     node = WhisperNode(directory=directory_to_watch, model_name="base.en")
-    
+
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
@@ -105,6 +109,7 @@ def main(args=None):
     finally:
         node.destroy_node()
         rclpy.shutdown()
+
 
 if __name__ == '__main__':
     main()

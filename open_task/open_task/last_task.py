@@ -131,15 +131,15 @@ class NavigateState(State):
         goal.pose.position.x = 0.686044
         goal.pose.position.y = -0.89254
         goal.pose.position.z = 0.0
-        qx, qy, qz, qw = quaternion_from_euler(0, 0, -1.57)
+        qx, qy, qz, qw = quaternion_from_euler(0, 0, 0.0)
         goal.pose.orientation.x = qx
         goal.pose.orientation.y = qy
         goal.pose.orientation.z = qz
         goal.pose.orientation.w = qw
         self.node.get_logger().info("Publishing navigation goal…")
         self.pub.publish(goal)
-        # while rclpy.ok() and not self.done:
-        #     rclpy.spin_once(self.node, timeout_sec=0.1)
+        while rclpy.ok() and not self.done:
+            rclpy.spin_once(self.node, timeout_sec=0.1)
         self.node.get_logger().info("Navigation succeeded.")
         return 'succeeded'
 
@@ -149,14 +149,16 @@ class VisualCommandState(State):
         self.node = rclpy.create_node('visual_and_speak_state')
         self.bridge = CvBridge()
         self.latest_img = None
-        # match publisher reliability
-        qos = QoSPresetProfiles.SENSOR_DATA.value
+        # QoS matching publisher reliability
+        from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
+        qos_sensor_data = QoSPresetProfiles.SENSOR_DATA.value
         self.node.create_subscription(
             Image,
             '/camera0/color/image_raw',
             self._image_cb,
-            qos
+            qos_sensor_data
         )
+        # OpenAI and speaking clients
         self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.model = "gpt-4o"
         self.speak_cli = self.node.create_client(SpeakText, '/speak_text')
@@ -165,23 +167,29 @@ class VisualCommandState(State):
         self.latest_img = msg
 
     def execute(self, blackboard: Blackboard) -> str:
-        deadline = self.node.get_clock().now().seconds_nanoseconds()[0] + 2
+        # wait up to 2 seconds for an image
+        start = self.node.get_clock().now().nanoseconds
+        timeout_ns = start + 2 * 1e9
         while rclpy.ok() and self.latest_img is None:
             rclpy.spin_once(self.node, timeout_sec=0.1)
-            if self.node.get_clock().now().seconds_nanoseconds()[0] > deadline:
+            if self.node.get_clock().now().nanoseconds > timeout_ns:
                 self.node.get_logger().error("No image received in time")
                 return 'failed'
+        # convert to OpenCV image (bgr8)
         try:
-            cv_img = self.bridge.imgmsg_to_cv2(self.latest_img, encoding='bgr8')
+            cv_img = self.bridge.imgmsg_to_cv2(self.latest_img, 'bgr8')
         except Exception as e:
             self.node.get_logger().error(f"CV bridge failed: {e}")
             return 'failed'
+        # encode to JPEG + base64
         ok, jpeg = cv2.imencode('.jpg', cv_img)
         if not ok:
             self.node.get_logger().error("JPEG encoding failed")
             return 'failed'
-        uri = f"data:image/jpeg;base64,{base64.b64encode(jpeg.tobytes()).decode('utf-8')}"
-        user_cmd = blackboard.get('transcript', '')
+        b64 = base64.b64encode(jpeg.tobytes()).decode('utf-8')
+        uri = f"data:image/jpeg;base64,{b64}"
+        # prepare multimodal request
+        user_cmd = blackboard['transcript']
         messages = [
             {"role": "system", "content": "You are a helpful vision assistant."},
             {"role": "user", "content": [
@@ -200,6 +208,7 @@ class VisualCommandState(State):
         result = resp.choices[0].message.content
         blackboard['vision_result'] = result
         self.node.get_logger().info("Vision processing complete")
+        # speak result
         if not self.speak_cli.wait_for_service(timeout_sec=1.0):
             self.node.get_logger().warning('/speak_text service unavailable')
             return 'failed'
