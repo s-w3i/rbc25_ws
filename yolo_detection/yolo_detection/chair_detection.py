@@ -15,6 +15,7 @@ from builtin_interfaces.msg import Time as TimeMsg
 import tf2_ros
 import tf2_geometry_msgs
 import os
+from rclpy.qos import QoSProfile, DurabilityPolicy
 
 class YOLOEmptyChairService(Node):
     def __init__(self):
@@ -26,7 +27,9 @@ class YOLOEmptyChairService(Node):
         self.save_dir = os.path.expanduser('~/empty_chair_detections')
         os.makedirs(self.save_dir, exist_ok=True)
 
-
+        qos_profile = QoSProfile(depth=10)
+        qos_profile.durability = DurabilityPolicy.TRANSIENT_LOCAL  
+        
         # Subscribers
         self.color_sub = self.create_subscription(Image, '/camera0/color/image_raw', self.color_callback, qos_sensor_data)
         self.depth_sub = self.create_subscription(Image, '/camera0/depth/image_rect_raw', self.depth_callback, qos_sensor_data)
@@ -39,7 +42,7 @@ class YOLOEmptyChairService(Node):
         self.detection_pub = self.create_publisher(Detections, '/empty_chair_detections', 10)
         self.pose_pub_raw = self.create_publisher(PoseStamped, '/chair_pose_raw', 10)
         self.tf_pub = self.create_publisher(TransformStamped, '/chair_tf', 10)
-        self.arm_target_pub = self.create_publisher(Vector3, '/arm_target', 10)
+        self.arm_target_pub = self.create_publisher(Vector3, '/arm_target', qos_profile)
 
         # TF
         self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
@@ -112,9 +115,12 @@ class YOLOEmptyChairService(Node):
 
         # find nearest
         nearest,min_d = None, float('inf')
+        h, w = depth_image.shape[:2]
         for c in empty:
-            cx,cy = c['center']
-            z = depth_image[cy,cx]/1000.0
+            cx, cy = c['center']
+            cx = int(max(0, min(w - 1, cx)))
+            cy = int(max(0, min(h - 1, cy)))
+            z = depth_image[cy, cx] / 1000.0
             if z<=0: continue
             fx,fy = cam_info.k[0], cam_info.k[4]
             cxi,cyi = cam_info.k[2], cam_info.k[5]
@@ -195,20 +201,20 @@ class YOLOEmptyChairService(Node):
 
         self.detection_pub.publish(det_msg)
 
-        # display window
-        win = "Empty Chair"
-        h,w = cv_image.shape[:2]
-        cv2.namedWindow(win,cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(win,w,h)
-        cv2.imshow(win,cv_image)
-        cv2.waitKey(1)
-        try:
-            subprocess.run(["wmctrl","-r",win,"-b","add,above"],check=True)
-            subprocess.run(["wmctrl","-a",win],check=True)
-        except:
-            pass
-        cv2.waitKey(5000)
-        cv2.destroyWindow(win)
+        # # display window
+        # win = "Empty Chair"
+        # h,w = cv_image.shape[:2]
+        # cv2.namedWindow(win,cv2.WINDOW_NORMAL)
+        # cv2.resizeWindow(win,w,h)
+        # cv2.imshow(win,cv_image)
+        # cv2.waitKey(1)
+        # try:
+        #     subprocess.run(["wmctrl","-r",win,"-b","add,above"],check=True)
+        #     subprocess.run(["wmctrl","-a",win],check=True)
+        # except:
+        #     pass
+        # cv2.waitKey(5000)
+        # cv2.destroyWindow(win)
 
         return response
 

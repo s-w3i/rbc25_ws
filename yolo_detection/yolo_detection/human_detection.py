@@ -33,7 +33,7 @@ class HumanSegmentationNode(Node):
             SegmentHumans, 'segment_humans', self.service_callback)
 
         # Load YOLO segmentation model
-        self.yolo = YOLO('yolov8n-seg.pt')
+        self.yolo = YOLO('yolo11s-seg.pt')
         self.get_logger().info(f"Model loaded with classes: {self.yolo.names}")
 
         # TF2 buffer with custom cache time
@@ -114,9 +114,19 @@ class HumanSegmentationNode(Node):
             binary = (mask > 0.5).astype(np.uint8) * 255
             if cv2.countNonZero(binary) == 0:
                 continue
-
+            
+             # Resize mask to match color image size for centroid and masking
+            if binary.shape[:2] != self.latest_color.shape[:2]:
+                binary_full = cv2.resize(
+                    binary,
+                    (self.latest_color.shape[1], self.latest_color.shape[0]),
+                    interpolation=cv2.INTER_NEAREST,
+                )
+            else:
+                binary_full = binary
+            
             # Compute 2D centroid
-            M = cv2.moments(binary)
+            M = cv2.moments(binary_full)
             if M['m00'] == 0:
                 continue
             cx2d = int(M['m10'] / M['m00'])
@@ -164,8 +174,8 @@ class HumanSegmentationNode(Node):
             except Exception as e:
                 self.get_logger().warn(f"TF transform failed for person {i}: {e}")
 
-            # Create segmented image mask
-            mask_3ch = cv2.merge([binary, binary, binary])
+            # Create segmented image mask using resized binary mask
+            mask_3ch = cv2.merge([binary_full, binary_full, binary_full])
             segmented_color = cv2.bitwise_and(self.latest_color, mask_3ch)
             try:
                 img_msg = self.bridge.cv2_to_imgmsg(segmented_color, 'bgr8')

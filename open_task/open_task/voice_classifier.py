@@ -47,7 +47,7 @@ class ClassifierNode(Node):
         self.prompt = PromptTemplate(
             input_variables=["history", "input"],
             template=(
-                "You are a concise home assistant. Answer in one or two sentences with no extra commentary.\n"
+                "You are a concise home assistant. Answer in one or two sentences with no extra commentary. Assume that you have a physical arm that can grab things\n"
                 "According to the weather forecast, today is a cloudy day, do consider this information when the user asks for outfit suggestions.\n"
                 "Conversation so far:\n{history}\n"
                 "User: {input}\n"

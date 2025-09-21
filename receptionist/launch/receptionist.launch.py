@@ -61,6 +61,13 @@ def generate_launch_description():
         name='guest_description_sentence_node',
         output='screen'
     )
+    
+    box_node = Node(
+        package='open_task',
+        executable='box_vision_node',
+        name='box_vision_node',
+        output='screen'
+    )
 
     return LaunchDescription([
         mic_launch,
@@ -70,4 +77,5 @@ def generate_launch_description():
         detect_human,
         guest_description,
         guest_sentence,
+        box_node,
     ])
